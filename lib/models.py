@@ -5,15 +5,12 @@ import sklearn
 import scipy.sparse
 import numpy as np
 import os, time, collections, shutil
-
+import logging
 
 #NFEATURES = 28**2
 #NCLASSES = 10
 
-
 # Common methods for all models
-
-
 class base_model(object):
     
     def __init__(self):
@@ -22,6 +19,7 @@ class base_model(object):
     # High-level interface which runs the constructed computational graph.
     
     def predict(self, data, labels=None, sess=None):
+        logging.info('predict:%s', 'START')
         loss = 0
         size = data.shape[0]
         # HACK : predictions = np.empty(size)
@@ -30,47 +28,46 @@ class base_model(object):
         for begin in range(0, size, self.batch_size):
             end = begin + self.batch_size
             end = min([end, size])
+            logging.info('predict:data index range= %s to %s', begin, end)
             
             batch_data = np.zeros((self.batch_size, data.shape[1]))
-            print('predict:batch_data.shape', batch_data.shape)
-            print('predict:batch_data', batch_data)
+            logging.debug('predict:batch_data.shape=%s', batch_data.shape)
             
             tmp_data = data[begin:end,:]
             if type(tmp_data) is not np.ndarray:
-                print('predict:convert sparse matrices')
+                logging.debug('predict:convert sparse matrices')
                 tmp_data = tmp_data.toarray()  # convert sparse matrices
             batch_data[:end-begin] = tmp_data
-            print('predict:tmp_data', tmp_data)
+            logging.debug('predict:tmp_data=%s', tmp_data)
             feed_dict = {self.ph_data: batch_data, self.ph_dropout: 1}
             
             # Compute loss if labels are given.
             if labels is not None:
                 # HACK: batch_labels = np.zeros(self.batch_size)
                 batch_labels = np.zeros((self.batch_size, data.shape[1]))
-                print('predict:batch_labels.shape', batch_labels.shape)
                 # HACK: batch_labels[:end-begin] = labels[begin:end]
                 batch_labels[:end-begin,:] = labels[begin:end,:]
                 feed_dict[self.ph_labels] = batch_labels
-                print('predict:batch_labels', batch_labels)
                 batch_pred, batch_loss = sess.run([self.op_prediction, self.op_loss], feed_dict)
                 loss += batch_loss
             else:
                 batch_pred = sess.run(self.op_prediction, feed_dict)
             
-            print('predict:batch_pred.shape', batch_pred.shape)
-            print('predict:batch_pred',batch_pred)
-            print('predict:batch_loss.shape', batch_loss.shape)
-            print('predict:batch_loss',batch_loss)
+            logging.debug('predict:batch_pred.shape=%s', batch_pred.shape)
+            logging.debug('predict:batch_pred=%s',batch_pred)
+            logging.debug('predict:batch_loss=%s',batch_loss)
+            logging.debug('predict:loss=%s',loss)
 
             predictions[begin:end] = batch_pred[:end-begin]
             
+        logging.info('predict:%s', 'END')
         if labels is not None:
             return predictions, loss * self.batch_size / size
         else:
             return predictions
         
     # Hack: def evaluate(self, data, labels, sess=None):
-    def evaluate(self, data, labels, sess=None, regression=True, predictions_preproc='round', debug=True):
+    def evaluate(self, data, labels, sess=None, regression=True, predictions_preproc='round'):
         """
         Runs one evaluation against the full epoch of data.
         Return the precision and the number of correct predictions.
@@ -84,36 +81,37 @@ class base_model(object):
         labels: size N
             N: number of signals (samples)
         """
+        logging.info('evaluate:%s', 'START')
         t_process, t_wall = time.process_time(), time.time()
         predictions, loss = self.predict(data, labels, sess)
-        # HACK: added if debug
-        if debug:
-            print('evaluate:predictions', predictions)
-            print('evaluate:predictions.shape', predictions.shape)
-            print('evaluate:labels.shape', labels.shape)
+        logging.debug('evaluate:predictions=%s', predictions)
+        logging.debug('evaluate:predictions.shape=%s', predictions.shape)
+        logging.debug('evaluate:labels.shape=%s', labels.shape)
+
         if (predictions_preproc == 'round'):
-            print('evaluate:predictions_preproc:round...')
+            logging.debug('evaluate:predictions_preproc:round...')
             predictions = np.around(predictions)
-            print('evaluate:predictions', predictions)
+            logging.debug('evaluate:predictions=%s', predictions)
+
         # TODO: adapt ncorrects to regression with range of validation
         ncorrects = sum(predictions == labels)
-        # HACK: added if debug
-        if debug:
-            print('evaluate:ncorrects.shape', ncorrects.shape)
-            print('evaluate:ncorrects', ncorrects)
+        logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
+        logging.debug('evaluate:ncorrects=%s', ncorrects)
+
         # HACK: added ncorrect reduc if shape (case for regression)
         if (ncorrects.shape[0] > 1):
-            print('evaluate:reducing ncorrects ...')
+            logging.debug('evaluate:reducing ncorrects ...')
             ncorrects = sum(ncorrects)
-        if debug:
-            print('evaluate:ncorrects.shape', ncorrects.shape)
-            print('evaluate:ncorrects', ncorrects)            
+
+        logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
+        logging.debug('evaluate:ncorrects=%s', ncorrects)            
+
         # HACK: added metrics for regression in regard to https://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics
         if regression:
-            accuracy = sklearn.metrics.mean_squared_error(labels, predictions)
-            evs = sklearn.metrics.explained_variance_score(labels, predictions, multioutput='variance_weighted')  # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.explained_variance_score.html#sklearn.metrics.explained_variance_score
-            score = evs
-            string = 'accuracy (mean squared error): {:.2f} ({:d} / {:d}), evs (weighted): {:.2f}, loss: {:.2e}'.format(
+            accuracy = ncorrects / labels.size
+            eqm = sklearn.metrics.mean_squared_error(labels, predictions)
+            score = eqm
+            string = 'accuracy: {:.2f} ({:d} / {:d}), RME: {:.2f}, loss: {:.2e}'.format(
                     accuracy, ncorrects, labels.size, score, loss)
         # HACK: added if-then-else
         else:
@@ -122,12 +120,16 @@ class base_model(object):
             score = f1
             string = 'accuracy: {:.2f} ({:d} / {:d}), f1 (weighted): {:.2f}, loss: {:.2e}'.format(
                     accuracy, ncorrects, len(labels), f1, loss)
+
         if sess is None:
             string += '\ntime: {:.0f}s (wall {:.0f}s)'.format(time.process_time()-t_process, time.time()-t_wall)
+
+        logging.info('evaluate:%s', 'END')
         # HACK: return string, accuracy, f1, loss
         return string, accuracy, score, loss
 
     def fit(self, train_data, train_labels, val_data, val_labels):
+        logging.info('fit:%s', 'START')
         t_process, t_wall = time.process_time(), time.time()
         sess = tf.Session(graph=self.graph)
         shutil.rmtree(self._get_path('summaries'), ignore_errors=True)
@@ -135,6 +137,7 @@ class base_model(object):
         shutil.rmtree(self._get_path('checkpoints'), ignore_errors=True)
         os.makedirs(self._get_path('checkpoints'))
         path = os.path.join(self._get_path('checkpoints'), 'model')
+        logging.info('fit:%s', 'sess.run')
         sess.run(self.op_init)
 
         # Training.
@@ -144,7 +147,8 @@ class base_model(object):
         num_steps = int(self.num_epochs * train_data.shape[0] / self.batch_size)
         for step in range(1, num_steps+1):
 
-            print('fit: step %s / %s' % (step, num_steps+1))
+            logging.debug('fit:step %s / %s', step, num_steps)
+            
             # Be sure to have used all the samples before using one a second time.
             if len(indices) < self.batch_size:
                 indices.extend(np.random.permutation(train_data.shape[0]))
@@ -154,20 +158,21 @@ class base_model(object):
             if type(batch_data) is not np.ndarray:
                 batch_data = batch_data.toarray()  # convert sparse matrices
             feed_dict = {self.ph_data: batch_data, self.ph_labels: batch_labels, self.ph_dropout: self.dropout}
-#            print('fit.feed_dict', feed_dict)
+
             learning_rate, loss_average = sess.run([self.op_train, self.op_loss_average], feed_dict)
 
             # Periodical evaluation of the model.
             if step % self.eval_frequency == 0 or step == num_steps:
+                logging.info('fit:periodical evaluation of the model ...')
                 epoch = step * self.batch_size / train_data.shape[0]
-                print('step {} / {} (epoch {:.2f} / {}):'.format(step, num_steps, epoch, self.num_epochs))
-                print('  learning_rate = {:.2e}, loss_average = {:.2e}'.format(learning_rate, loss_average))
-                #string, accuracy, f1, loss = self.evaluate(val_data, val_labels, sess)
+                logging.info('fit:step {} / {} (epoch {:.2f} / {}):'.format(step, num_steps, epoch, self.num_epochs))
+                logging.info('fit:learning_rate = {:.2e}, loss_average = {:.2e}'.format(learning_rate, loss_average))
+                # HACK: string, accuracy, f1, loss = self.evaluate(val_data, val_labels, sess)
                 string, accuracy, score, loss = self.evaluate(val_data, val_labels, sess)
                 accuracies.append(accuracy)
                 losses.append(loss)
-                print('  validation {}'.format(string))
-                print('  time: {:.0f}s (wall {:.0f}s)'.format(time.process_time()-t_process, time.time()-t_wall))
+                logging.info('  validation {}'.format(string))
+                logging.info('  time: {:.0f}s (wall {:.0f}s)'.format(time.process_time()-t_process, time.time()-t_wall))
 
                 # Summaries for TensorBoard.
                 summary = tf.Summary()
@@ -180,11 +185,12 @@ class base_model(object):
                 # Save model parameters (for evaluation).
                 self.op_saver.save(sess, path, global_step=step)
 
-        print('validation accuracy: peak = {:.2f}, mean = {:.2f}'.format(max(accuracies), np.mean(accuracies[-10:])))
+        logging.info('validation accuracy: peak = {:.2f}, mean = {:.2f}'.format(max(accuracies), np.mean(accuracies[-10:])))
         writer.close()
         sess.close()
         
         t_step = (time.time() - t_wall) / num_steps
+        logging.info('fit:%s:t_step=%s', 'END', t_step)
         return accuracies, losses, t_step
 
     def get_var(self, name):
@@ -196,21 +202,23 @@ class base_model(object):
 
     # Methods to construct the computational graph.
     
-    def build_graph(self, M_0):
+    def build_graph(self, M_0, regression=True):
         """Build the computational graph of the model."""
+        logging.info('build_graph:%s', 'START')
         self.graph = tf.Graph()
         with self.graph.as_default():
 
             # Inputs.
             with tf.name_scope('inputs'):
                 self.ph_data = tf.placeholder(tf.float32, (self.batch_size, M_0), 'data')
-                # HACK: self.ph_labels = tf.placeholder(tf.int32, (self.batch_size), 'labels')
-                self.ph_labels = tf.placeholder(tf.int32, (self.batch_size, M_0), 'labels')
+                if regression:
+                    self.ph_labels = tf.placeholder(tf.int32, (self.batch_size, M_0), 'labels')
+                else:
+                    self.ph_labels = tf.placeholder(tf.int32, (self.batch_size), 'labels')
                 self.ph_dropout = tf.placeholder(tf.float32, (), 'dropout')
 
             # Model.
             op_logits = self.inference(self.ph_data, self.ph_dropout)
-            print('op_logits', op_logits)
             self.op_loss, self.op_loss_average = self.loss(op_logits, self.ph_labels, self.regularization)
             self.op_train = self.training(self.op_loss, self.learning_rate,
                     self.decay_steps, self.decay_rate, self.momentum)
@@ -224,6 +232,7 @@ class base_model(object):
             self.op_saver = tf.train.Saver(max_to_keep=5)
         
         self.graph.finalize()
+        logging.info('build_graph:%s', 'END')
     
     def inference(self, data, dropout):
         """
@@ -259,38 +268,38 @@ class base_model(object):
                 prediction = tf.argmax(logits, axis=1)
                 return prediction
 
-    def loss(self, logits, labels, regularization):
+    def loss(self, logits, labels, regularization, regression=True):
         """Adds to the inference model the layers required to generate loss."""
         with tf.name_scope('loss'):
-            #with tf.name_scope('cross_entropy'):
-            #    labels = tf.to_int64(labels)
-                # TO HACK https://github.com/mdeff/cnn_graph/issues/9
-            #    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
-                # TO HACK https://github.com/mdeff/cnn_graph/issues/9
-            #    cross_entropy = tf.reduce_mean(cross_entropy)
-            #with tf.name_scope('regularization'):
-            #    regularization *= tf.add_n(self.regularizers)
-                # TO HACK https://github.com/mdeff/cnn_graph/issues/9
-            #loss = cross_entropy + regularization
-            
-#            print(type(logits))
-#            print(type(labels))
-#            print(type(regularization))
-            labels = tf.to_float(labels)
-            error = tf.subtract(logits, labels)
-            error_norm = tf.norm(error)
-            loss = error_norm
+            if regression:
+                labels = tf.to_float(labels)
+                error = tf.subtract(logits, labels)
+                error_norm = tf.norm(error)
+                loss = error_norm
+            else:
+                with tf.name_scope('cross_entropy'):
+                    labels = tf.to_int64(labels)
+                    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+                    cross_entropy = tf.reduce_mean(cross_entropy)
+                with tf.name_scope('regularization'):
+                    regularization *= tf.add_n(self.regularizers)
+                loss = cross_entropy + regularization
 
             # Summaries for TensorBoard.
-            #tf.summary.scalar('loss/cross_entropy', cross_entropy)
-            #tf.summary.scalar('loss/regularization', regularization)
+            if regression:
+                pass
+            else:
+                tf.summary.scalar('loss/cross_entropy', cross_entropy)
+                tf.summary.scalar('loss/regularization', regularization)
             tf.summary.scalar('loss/total', loss)
             with tf.name_scope('averages'):
                 averages = tf.train.ExponentialMovingAverage(0.9)
-                # HACK op_averages = averages.apply([cross_entropy, regularization, loss])
-                op_averages = averages.apply([loss])
-                #tf.summary.scalar('loss/avg/cross_entropy', averages.average(cross_entropy))
-                #tf.summary.scalar('loss/avg/regularization', averages.average(regularization))
+                if regression:
+                    op_averages = averages.apply([loss])
+                else:
+                    op_averages = averages.apply([cross_entropy, regularization, loss])
+                    tf.summary.scalar('loss/avg/cross_entropy', averages.average(cross_entropy))
+                    tf.summary.scalar('loss/avg/regularization', averages.average(regularization))
                 tf.summary.scalar('loss/avg/total', averages.average(loss))
                 with tf.control_dependencies([op_averages]):
                     loss_average = tf.identity(averages.average(loss), name='control')
