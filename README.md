@@ -1,8 +1,34 @@
+## Notes about the GenEars' fork
+
+The original *[mdeff/cnn_graph](https://github.com/mdeff/cnn_graph)* code is graph signal classification oriented.
+See below and in the original repo for more details.
+
+The _GenEars_' fork is an on-going study to enhance the ```models.py``` for **node regression** upon a graph topology.
+The underlying use case is to model/predict events count generated per node on an arbitrary or technological network (e.g. sensor network, telco network, etc.) from records of real event counts.
+
+Protocol overview:
+>>> A : network topology as an adjacency matrix,
+
+>>> signal : X = [x1, x2, … X], n x dx, where x_i are daily logs (2018-01-01, 2018-01-02, etc.) and x_j are count of events per node.
+
+>>> model the signal upon graph with ```accuracy, loss, t_step = model.fit(X_train, X_train, X_val, X_val)```
+
+Some notes coming from a conversation I had with Michaël Defferrard:
+>>> For a dense regression task on a small graph, one would not coarsen the graph (at least at first).
+That is, the graph is the same at every layer, the number of nodes is not reduced. If you want to reduce it, you'll have to expand back afterwards, similarly to the encoder-decoder architectures used in semantic segmentation of images.
+
+>>> Second, one need to change the loss function.
+That function should be the metric you care about.
+One could be the l2 norm of the difference between the true and predicted counts of events.
+
+
+_--- below: original [mdeff/cnn_graph](https://github.com/mdeff/cnn_graph) readme.md ---_
+
 # Convolutional Neural Networks on Graphs with Fast Localized Spectral Filtering
 
 The code in this repository implements an efficient generalization of the
 popular Convolutional Neural Networks (CNNs) to arbitrary graphs, presented in
-our paper:
+the following paper:
 
 Michaël Defferrard, Xavier Bresson, Pierre Vandergheynst, [Convolutional Neural
 Networks on Graphs with Fast Localized Spectral Filtering][arXiv], Neural
@@ -34,7 +60,7 @@ There is also implementations of the filters used in:
 
 ## Installation
 
-1. Clone this repository.
+1. Clone the repository.
    ```sh
    git clone https://github.com/mdeff/cnn_graph
    cd cnn_graph
@@ -50,7 +76,7 @@ There is also implementations of the filters used in:
    jupyter notebook
    ```
 
-## Reproducing our results
+## Reproducing the results
 
 Run all the notebooks to reproduce the experiments on
 [MNIST](nips2016/mnist.ipynb) and [20NEWS](nips2016/20news.ipynb) presented in
