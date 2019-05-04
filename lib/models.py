@@ -30,7 +30,11 @@ class base_model(object):
             end = min([end, size])
             logging.info('predict:data index range= %s to %s', begin, end)
             
-            batch_data = np.zeros((self.batch_size, data.shape[1]))
+            # HACK: add capability to have a vector as data
+            if (data.ndim > 1):
+                batch_data = np.zeros((self.batch_size, data.shape[1]))
+            else:
+                batch_data = np.zeros((self.batch_size, data.shape[0]))
             logging.debug('predict:batch_data.shape=%s', batch_data.shape)
             
             tmp_data = data[begin:end,:]
@@ -43,20 +47,32 @@ class base_model(object):
             
             # Compute loss if labels are given.
             if labels is not None:
+                logging.debug('predict:labels.shape=%s', labels.shape)
                 # HACK: batch_labels = np.zeros(self.batch_size)
-                batch_labels = np.zeros((self.batch_size, data.shape[1]))
                 # HACK: batch_labels[:end-begin] = labels[begin:end]
-                batch_labels[:end-begin,:] = labels[begin:end,:]
+                # HACK: add capability to have a vector as data
+                if data.ndim > 1:
+                    logging.debug('predict:labels:case=%s', "data.ndim > 1")
+                    batch_labels = np.zeros((self.batch_size, data.shape[1]))
+                    batch_labels[:end-begin,:] = labels[begin:end,:]
+                else:
+                    logging.debug('predict:labels:case=%s', "data.ndim <= 1")
+                    batch_labels = np.zeros((self.batch_size, data.shape[0]))
+                    # TODO: gérer spécifiquement le cas batch_size == 1 car il est ici implicite.
+                    batch_labels[:end-begin,:] = labels
+
                 feed_dict[self.ph_labels] = batch_labels
                 batch_pred, batch_loss = sess.run([self.op_prediction, self.op_loss], feed_dict)
                 loss += batch_loss
+
+                logging.debug('predict:batch_loss=%s',batch_loss)
+                logging.debug('predict:loss=%s',loss)
+
             else:
                 batch_pred = sess.run(self.op_prediction, feed_dict)
             
             logging.debug('predict:batch_pred.shape=%s', batch_pred.shape)
             logging.debug('predict:batch_pred=%s',batch_pred)
-            logging.debug('predict:batch_loss=%s',batch_loss)
-            logging.debug('predict:loss=%s',loss)
 
             predictions[begin:end] = batch_pred[:end-begin]
             
@@ -67,7 +83,7 @@ class base_model(object):
             return predictions
         
     # Hack: def evaluate(self, data, labels, sess=None):
-    def evaluate(self, data, labels, sess=None, regression=True, predictions_preproc='round'):
+    def evaluate(self, data, labels, sess=None, regression=True, predictions_preproc='round_d1'):
         """
         Runs one evaluation against the full epoch of data.
         Return the precision and the number of correct predictions.
@@ -83,15 +99,24 @@ class base_model(object):
         """
         logging.info('evaluate:%s', 'START')
         t_process, t_wall = time.process_time(), time.time()
+        
         predictions, loss = self.predict(data, labels, sess)
+        
         logging.debug('evaluate:predictions=%s', predictions)
         logging.debug('evaluate:predictions.shape=%s', predictions.shape)
         logging.debug('evaluate:labels.shape=%s', labels.shape)
 
         if (predictions_preproc == 'round'):
-            logging.debug('evaluate:predictions_preproc:round...')
+            logging.debug('evaluate:predictions_preproc=%s', 'round')
             predictions = np.around(predictions)
             logging.debug('evaluate:predictions=%s', predictions)
+        elif (predictions_preproc == 'round_d1'):
+            logging.debug('evaluate:predictions_preproc=%s', 'round_d1')
+            predictions = np.around(predictions, decimals=1)
+            logging.debug('evaluate:predictions=%s', predictions)
+        else:
+            logging.debug('evaluate:predictions_preproc=%s', 'no preproc')
+            
 
         # TODO: adapt ncorrects to regression with range of validation
         ncorrects = sum(predictions == labels)
@@ -111,7 +136,7 @@ class base_model(object):
             accuracy = ncorrects / labels.size
             eqm = sklearn.metrics.mean_squared_error(labels, predictions)
             score = eqm
-            string = 'accuracy: {:.2f} ({:d} / {:d}), RME: {:.2f}, loss: {:.2e}'.format(
+            string = 'accuracy: {:.2f} ({:d} / {:d}), MSE: {:.2f}, loss: {:.2e}'.format(
                     accuracy, ncorrects, labels.size, score, loss)
         # HACK: added if-then-else
         else:
@@ -132,11 +157,18 @@ class base_model(object):
         logging.info('fit:%s', 'START')
         t_process, t_wall = time.process_time(), time.time()
         sess = tf.Session(graph=self.graph)
+        
+        logging.info('fit:%s', 'rmtree summaries ...')
         shutil.rmtree(self._get_path('summaries'), ignore_errors=True)
         writer = tf.summary.FileWriter(self._get_path('summaries'), self.graph)
+        
+        logging.info('fit:%s', 'rmtree checkpoints ...')
         shutil.rmtree(self._get_path('checkpoints'), ignore_errors=True)
+        
+        logging.info('fit:%s', 'makedir checkpoints ...')
         os.makedirs(self._get_path('checkpoints'))
         path = os.path.join(self._get_path('checkpoints'), 'model')
+        
         logging.info('fit:%s', 'sess.run')
         sess.run(self.op_init)
 
@@ -147,7 +179,7 @@ class base_model(object):
         num_steps = int(self.num_epochs * train_data.shape[0] / self.batch_size)
         for step in range(1, num_steps+1):
 
-            logging.debug('fit:step %s / %s', step, num_steps)
+            logging.info('fit:step %s / %s ...', step, num_steps)
             
             # Be sure to have used all the samples before using one a second time.
             if len(indices) < self.batch_size:
@@ -160,6 +192,7 @@ class base_model(object):
             feed_dict = {self.ph_data: batch_data, self.ph_labels: batch_labels, self.ph_dropout: self.dropout}
 
             learning_rate, loss_average = sess.run([self.op_train, self.op_loss_average], feed_dict)
+            logging.info('fit:step %s / %s:learning_rate=%s:loss_average=%s', step, num_steps, learning_rate, loss_average)
 
             # Periodical evaluation of the model.
             if step % self.eval_frequency == 0 or step == num_steps:
@@ -171,8 +204,8 @@ class base_model(object):
                 string, accuracy, score, loss = self.evaluate(val_data, val_labels, sess)
                 accuracies.append(accuracy)
                 losses.append(loss)
-                logging.info('  validation {}'.format(string))
-                logging.info('  time: {:.0f}s (wall {:.0f}s)'.format(time.process_time()-t_process, time.time()-t_wall))
+                logging.info('fit:validation {}'.format(string))
+                logging.info('fit:time: {:.0f}s (wall {:.0f}s)'.format(time.process_time()-t_process, time.time()-t_wall))
 
                 # Summaries for TensorBoard.
                 summary = tf.Summary()
