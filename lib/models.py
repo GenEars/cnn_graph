@@ -7,6 +7,7 @@ import numpy as np
 import os, time, collections, shutil
 import logging
 
+
 #NFEATURES = 28**2
 #NCLASSES = 10
 
@@ -81,7 +82,7 @@ class base_model(object):
             return predictions, loss * self.batch_size / size
         else:
             return predictions
-        
+    
     # Hack: def evaluate(self, data, labels, sess=None):
     def evaluate(self, data, labels, sess=None, regression=True, predictions_preproc='round_d1'):
         """
@@ -106,40 +107,39 @@ class base_model(object):
         logging.debug('evaluate:predictions.shape=%s', predictions.shape)
         logging.debug('evaluate:labels.shape=%s', labels.shape)
 
-        if (predictions_preproc == 'round'):
-            logging.debug('evaluate:predictions_preproc=%s', 'round')
-            predictions = np.around(predictions)
-            logging.debug('evaluate:predictions=%s', predictions)
-        elif (predictions_preproc == 'round_d1'):
-            logging.debug('evaluate:predictions_preproc=%s', 'round_d1')
-            predictions = np.around(predictions, decimals=1)
-            logging.debug('evaluate:predictions=%s', predictions)
-        else:
-            logging.debug('evaluate:predictions_preproc=%s', 'no preproc')
-            
-
-        # TODO: adapt ncorrects to regression with range of validation
-        ncorrects = sum(predictions == labels)
-        logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
-        logging.debug('evaluate:ncorrects=%s', ncorrects)
-
-        # HACK: added ncorrect reduc if shape (case for regression)
-        if (ncorrects.shape[0] > 1):
-            logging.debug('evaluate:reducing ncorrects ...')
-            ncorrects = sum(ncorrects)
-
-        logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
-        logging.debug('evaluate:ncorrects=%s', ncorrects)            
-
         # HACK: added metrics for regression in regard to https://scikit-learn.org/stable/modules/classes.html#module-sklearn.metrics
         if regression:
-            accuracy = ncorrects / labels.size
+            
             eqm = sklearn.metrics.mean_squared_error(labels, predictions)
             score = eqm
+            
+            predictions = np.around(predictions)
+            predictions = np.clip(predictions, 0, 1)
+            
+            labels      = np.clip(labels, 0, 1)
+            
+            ncorrects       = sum(predictions == labels)
+            
+            # HACK: added ncorrect reduc if shape (case for regression)
+            if (ncorrects.shape[0] > 1):
+                logging.debug('evaluate:reducing ncorrects ...')
+                ncorrects = sum(ncorrects)
+    
+            logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
+            logging.debug('evaluate:ncorrects=%s', ncorrects)            
+
+            accuracy = 100 * ncorrects / labels.size
+
+            
             string = 'accuracy: {:.2f} ({:d} / {:d}), MSE: {:.2f}, loss: {:.2e}'.format(
                     accuracy, ncorrects, labels.size, score, loss)
         # HACK: added if-then-else
         else:
+            # TODO: adapt ncorrects to regression with range of validation
+            ncorrects = sum(predictions == labels)
+            logging.debug('evaluate:ncorrects.shape=%s', ncorrects.shape)
+            logging.debug('evaluate:ncorrects=%s', ncorrects)
+
             accuracy = 100 * sklearn.metrics.accuracy_score(labels, predictions)
             f1 = 100 * sklearn.metrics.f1_score(labels, predictions, average='weighted')
             score = f1
@@ -262,7 +262,8 @@ class base_model(object):
             
             # Summaries for TensorBoard and Save for model parameters.
             self.op_summary = tf.summary.merge_all()
-            self.op_saver = tf.train.Saver(max_to_keep=5)
+            # HACK: self.op_saver = tf.train.Saver(max_to_keep=5)
+            self.op_saver = tf.train.Saver(max_to_keep=1)
         
         self.graph.finalize()
         logging.info('build_graph:%s', 'END')
